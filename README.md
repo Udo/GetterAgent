@@ -14,4 +14,5 @@ url parameter. The following options are supported:
   dir=/some/directory   : saves the enclosure files to the specified location
   podcastname=SomeCast  : specify the podcast name to put in front of the file name
   log=/path/to/file.log : specify the filename of the download history file
+  oext=.mp5             : override the enclosures file extension
 ``` 
