@@ -91,7 +91,10 @@ function get_rss_items(&$o)
   $content = shell_exec('curl -s '.escapeshellarg($o['url']).' 2>&1');
   $meta = xml_isolate($content, '<channel>', '</channel>');
   $o['meta'] = $meta['channel'][0];
-  return(xml_isolate($content, '<item>', '</item>'));  
+  $items = xml_isolate($content, '<item>', '</item>');
+  if(sizeof($items) == 0)
+    $items = $meta;
+  return($items);  
 }
 
 function get_rss_enclosures(&$o)
@@ -117,6 +120,7 @@ class SimpleXML
   
   static function ParseAttributes($attribstr, &$result)
   {
+    $attribstr_o = $attribstr;
     while($attribstr != '')
     {
       $key = trim(nibble('=', $attribstr));
@@ -124,6 +128,16 @@ class SimpleXML
       $value = nibble('"', $attribstr);
       while(substr($attribstr, 0, 1) == '\\')
         $value .= '"'.nibble('"', $attribstr);
+      if($key != '' && trim($value) !=='')
+        $result['@'.trim($key)] = $value;
+    }
+    while($attribstr_o != '')
+    {
+      $key = trim(nibble('=', $attribstr_o));
+      nibble("'", $attribstr_o);
+      $value = nibble("'", $attribstr_o);
+      while(substr($attribstr_o, 0, 1) == '\\')
+        $value .= '"'.nibble("'", $attribstr_o);
       if($key != '' && trim($value) !=='')
         $result['@'.trim($key)] = $value;
     }
@@ -373,7 +387,13 @@ This command downloads all the enclosure items from an RSS feed specified by the
     {
       $logFileName = first($o['log'], 'geta-download.log');
       $alreadyDownloaded = json_decode(first(@file_get_contents($logFileName), '{}'), true);
-      foreach(get_rss_enclosures($o) as $enc)
+      $encList = get_rss_enclosures($o);
+      if(sizeof($encList) == 0)
+      {
+        print('no enclosures found'.chr(10));
+        print_r($o['meta']);
+      }
+      foreach($encList as $enc)
       {
         $baseName = $enc['filename'];
         $fileUrl = $enc['@url'];
