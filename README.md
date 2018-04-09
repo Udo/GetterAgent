@@ -1,7 +1,7 @@
 # GetterAgent
 A command line tool that looks at stuff and downloads stuff. In this version, it only downloads enclosures from RSS feeds. This may be expanded in the future.
 
-Dependencies: PHP
+Dependencies: PHP, cURL, Linux/Unix system
 
 ```
 geta command usage:
