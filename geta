@@ -1,0 +1,411 @@
+#!/usr/bin/php 
+<?php
+  
+error_reporting(E_ALL & ~E_NOTICE);
+  
+function nibble($segdiv, &$cake, &$found = false)
+{
+  $p = strpos($cake, $segdiv);
+  if ($p === false)
+  {
+    $result = $cake;
+    $cake = '';
+    $found = false;
+  }
+  else
+  {
+    $result = substr($cake, 0, $p);
+    $cake = substr($cake, $p + strlen($segdiv));
+    $found = true;
+  }
+  return $result;
+}
+  
+function first(&$fvar)
+{
+	foreach(func_get_args() as $a)
+		if($a != null && $a != '') return($a);
+	return('');
+}
+
+function error($msg)
+{
+  print('Error: '.$msg.chr(10));
+  exit;
+}
+  
+function xml_isolate($haystack, $startsWith, $endsWith)
+{
+  $result = array();
+  while($haystack != '')
+  {
+    $found = false;
+    nibble($startsWith, $haystack, $found);
+    if($found) {
+      $result[] = SimpleXML::Parse(trim(nibble($endsWith, $haystack)));
+    }
+  }
+  if(sizeof($result) > 0)
+    return(array(substr($startsWith, 1, -1) => $result));
+  else
+    return(array());
+}
+
+function invoke_command($params)
+{
+  if(!$GLOBALS['filename_filters'][$params['fnfilter']])
+  {
+    print('Error: unknown filename filter "'.$params['fnfilter'].'"'.chr(10));  
+    print('Available filename filters: '.implode(', ', array_keys($GLOBALS['filename_filters'])).chr(10));
+    exit;
+  }
+  else if(isset($GLOBALS['commands'][$params['command']]))
+  {
+    $GLOBALS['commands'][$params['command']]($params);
+  }
+  else
+  {
+    print('Error: unknown command "'.$params['command'].'"'.chr(10));  
+    #print('Available commands: '.implode(', ', array_keys($GLOBALS['commands'])).chr(10));
+    $GLOBALS['commands']['help']($params);
+    exit;
+  }
+}
+
+function output($params, $data)
+{
+  if(isset($GLOBALS['fmt'][$params['fmt']]))
+  {
+    $GLOBALS['fmt'][$params['fmt']]($params, $data);
+  }
+  else
+  {
+    print('Error: unknown output format "'.$params['fmt'].'"'.chr(10));  
+    print('Available formats: '.implode(', ', array_keys($GLOBALS['fmt'])).chr(10));
+    exit;
+  }
+}
+
+function get_rss_items(&$o)
+{
+  $content = shell_exec('curl -s '.escapeshellarg($o['url']).' 2>&1');
+  $meta = xml_isolate($content, '<channel>', '</channel>');
+  $o['meta'] = $meta['channel'][0];
+  return(xml_isolate($content, '<item>', '</item>'));  
+}
+
+function get_rss_enclosures(&$o)
+{
+  $result = array();
+  $items = get_rss_items($o);
+  if(is_array($items['item'])) foreach($items['item'] as $it)
+  {
+    if($it['enclosure'])
+    {
+      $enc = $it['enclosure'][0];
+      $enc['filename'] = $o['opath'].$GLOBALS['filename_filters'][$o['fnfilter']]($enc, $it, $o).$o['oext']; 
+      $result[] = $enc;
+    }
+  }
+  return($result);
+}
+
+class SimpleXML
+{
+  
+  static $compressSimpleTextTags = true;
+  
+  static function ParseAttributes($attribstr, &$result)
+  {
+    while($attribstr != '')
+    {
+      $key = trim(nibble('=', $attribstr));
+      nibble('"', $attribstr);
+      $value = nibble('"', $attribstr);
+      while(substr($attribstr, 0, 1) == '\\')
+        $value .= '"'.nibble('"', $attribstr);
+      if($key != '' && trim($value) !=='')
+        $result['@'.trim($key)] = $value;
+    }
+  }
+  
+  static function Eat(&$s)
+  {
+    $result = array();
+    while($s != '')
+    {
+      $tx = trim(nibble('<', $s));
+      if($tx != '')
+        $result['$'] .= $tx;
+      if($s != '')
+      {
+        $nc = substr($s, 0, 1);
+        if($nc == '?') 
+        {
+          # it's a PI, ignore it
+          nibble('>', $s);
+        }
+        else if($nc == '!') 
+        {
+          $com = trim(nibble(']>', $s));
+          if(substr($com, 0, 8) == '![CDATA[')
+          {
+            $result['$'] .= substr($com, 8, -1);
+          }
+        }
+        else if($nc == '/')
+        {
+          # our tag is closing
+          nibble('>', $s);
+          return($result);
+        }
+        else
+        {
+          $tag_str = trim(nibble('>', $s));
+          $tag_name = trim(nibble(' ', $tag_str));
+          #print($indent.$tag_name.chr(10));
+          if(stristr($tag_str.'>', '/>') === false)
+          {
+            # tag is open now, branch 
+            $child = self::Eat($s);
+            self::ParseAttributes($tag_str, $child);
+            if(self::$compressSimpleTextTags && sizeof($child) == 1 && $child['$'])
+            {
+              if($result[$tag_name])
+              {
+                if(!is_array($result[$tag_name]))
+                  # we made a horrible mistake!
+                  $result[$tag_name] = array(array('$' => $result[$tag_name]), $child);
+                else
+                  $result[$tag_name][] = $child;
+              }
+              else
+                $result[$tag_name] = $child['$'];
+            }
+            else
+            {
+              $result[$tag_name][] = $child;
+            }
+          }
+          else
+          {
+            $child = array();
+            self::ParseAttributes($tag_str, $child);
+            if(sizeof($child) > 0)
+              $result[$tag_name][] = $child;
+          }
+        }
+      }
+    }
+    return($result);
+  }
+  
+  static function Parse($s)
+  {
+    return(self::Eat($s));
+  }
+  
+  static function GetNodeText($node)
+  {
+    if(is_string($node))
+      return($node);
+    else if($node['$'])
+    {
+      return($node['$']);
+    }
+    else if($node[0])
+    {
+      return(self::GetNodeText($node[0]));
+    }
+  }
+  
+  static function DumpStruct($struct, $indent = '', $baseTag = false)
+  {
+    foreach($struct as $k => $v)
+    {
+      $n = is_numeric($k) && $baseTag ? $baseTag : $k;
+      if(is_array($v))
+      {
+        if(is_numeric($k) && $baseTag)
+        {
+          if($k > 0)
+            print(substr($indent, 0, -2).$baseTag.chr(10));
+        }
+        else
+        {
+          print($indent.$k.chr(10));
+        }
+        self::DumpStruct($v, $indent.'  ', $k);
+      }
+      else
+      {
+        print($indent.$k.': '.str_replace(array(chr(10), chr(13)), array('\\n', ''), $v).chr(10));
+      }
+    }
+  }
+
+}
+
+$params = array();
+$params['script_name'] = array_shift($argv);
+$params['command'] = array_shift($argv);
+$params['fmt'] = 'json';
+$params['fnfilter'] = 'default';
+$params['opath'] = '';
+$params['oext'] = '';
+while(sizeof($argv) > 0)
+{
+  $s = array_shift($argv);
+  $key = nibble('=', $s);
+  $params[$key] = $s;
+}
+
+$GLOBALS['fmt'] = array(
+  
+  'json' => function($o, $data) {
+    print(json_encode($data).chr(10));
+  },
+
+  'debug' => function($o, $data) {
+    print_r($data);
+  },
+  
+  'php' => function($o, $data) {
+    print(serialize($data));
+    print(chr(10));
+  },
+  
+  'text' => function($o, $data) {
+    if(sizeof($data) == 0)
+      print('(no data)'.chr(10));
+    else
+      SimpleXML::DumpStruct($data);
+  },
+  
+);
+
+$GLOBALS['filename_filters'] = array(
+  
+  'default' => function($enclosure, $item, $o) {
+    $filename = basename($enclosure['@url']);
+    if(stristr($filename, '?') !== false)
+      return(nibble('?', $filename));
+    else
+      return($filename);
+  },
+
+  'guid' => function($enclosure, $item, $o) {
+    return(SimpleXML::GetNodeText($item['guid']));
+  },
+  
+  'title' => function($enclosure, $item, $o) {
+    return(SimpleXML::GetNodeText($item['title']));
+  },
+
+  'unixtime' => function($enclosure, $item, $o) {
+    return(strtotime(SimpleXML::GetNodeText($item['pubDate'])));
+  },
+
+  'datetime' => function($enclosure, $item, $o) {
+    return(gmdate('Y-m-d--H-i-s', strtotime(SimpleXML::GetNodeText($item['pubDate']))));
+  },
+  
+);
+
+$GLOBALS['commands'] = array(
+  
+  'help' => function() {
+    print('geta command usage:
+
+  geta download url=http://example.com/rss [options]
+
+This command downloads all the enclosure items from an RSS feed specified by the url parameter. The following options are supported:
+
+  dir=/some/directory   : saves the enclosure files to the specified location
+  podcastname=SomeCast  : specify the podcast name to put in front of the file name
+  log=/path/to/file.log : specify the filename of the download history file
+');
+  },
+  
+  'debug-xml' => function($o) {
+    if(!$o['url'])
+    {
+      error('parameter "url" missing');
+    }
+    else
+    {
+      $content = shell_exec('curl -s '.escapeshellarg($o['url']).' 2>&1');
+      output($o, SimpleXML::Parse($content));
+    }
+  },
+  
+  'debug-rss-items' => function($o) {
+    if(!$o['url'])
+    {
+      error('parameter "url" missing');
+    }
+    else
+    {
+      output($o, get_rss_items($o));
+    }
+  },
+
+  'debug-enclosures' => function($o) {
+    if(!$o['url'])
+    {
+      error('parameter "url" missing');
+    }
+    else
+    {
+      output($o, get_rss_enclosures($o));
+    }
+  },
+  
+  'download' => function($o) {
+    if(!$o['url'])
+    {
+      error('parameter "url" missing');
+    }
+    else
+    {
+      $logFileName = first($o['log'], 'geta-download.log');
+      $alreadyDownloaded = json_decode(first(@file_get_contents($logFileName), '{}'), true);
+      foreach(get_rss_enclosures($o) as $enc)
+      {
+        $baseName = $enc['filename'];
+        $fileUrl = $enc['@url'];
+        $url = parse_url(first($o['meta']['link'], $enc['@url']));
+        $saveName = array();
+        $saveName[] = first($o['podcastname'], $o['meta']['title'], $url['host']);
+        $saveName[] = $baseName;
+        $saveFileName = implode('-', $saveName);
+        if($alreadyDownloaded[$saveFileName])
+        {
+          print('- skipping '.$fileUrl.' (already downloaded)'.chr(10));
+        }
+        else
+        {
+          $cmd = 'curl -L '.escapeshellarg($fileUrl).' > '.escapeshellarg($o['dir'].'/'.$saveFileName);
+          print($cmd.chr(10));
+          $output = shell_exec($cmd);
+          if($output)
+          {
+            $alreadyDownloaded[$saveFileName] = time();
+            file_put_contents($logFileName, json_encode($alreadyDownloaded));
+          }
+        }
+      }
+      file_put_contents($logFileName, json_encode($alreadyDownloaded));
+    }
+  },
+  
+);
+
+invoke_command($params);
+
+
+
+
+
+
+
