@@ -341,6 +341,7 @@ This command downloads all the enclosure items from an RSS feed specified by the
   oext=.mp5             : override the enclosures file extension
   fnfield=guid          : override the field that determines the file name
                           options are default, guid, title, unixtime, datetime
+  overwrite=no          : never overwrite a file
 ');
   },
   
@@ -410,7 +411,10 @@ This command downloads all the enclosure items from an RSS feed specified by the
         {
           $cmd = 'curl -L '.escapeshellarg($fileUrl).' > '.escapeshellarg($o['dir'].'/'.$saveFileName);
           print($cmd.chr(10));
-          $output = shell_exec($cmd);
+          if(!file_exists($o['dir'].'/'.$saveFileName) || $o['overwrite'] != 'no')
+            $output = shell_exec($cmd);
+          else
+            $output = true;
           if($output)
           {
             $alreadyDownloaded[$saveFileName] = time();

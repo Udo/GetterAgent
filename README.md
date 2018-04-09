@@ -17,4 +17,5 @@ url parameter. The following options are supported:
   oext=.mp5             : override the enclosures file extension
   fnfield=guid          : override the field that determines the file name
                           options are default, guid, title, unixtime, datetime
+  overwrite=no          : never overwrite a file
 ``` 
