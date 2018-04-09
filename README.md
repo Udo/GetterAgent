@@ -15,4 +15,6 @@ url parameter. The following options are supported:
   podcastname=SomeCast  : specify the podcast name to put in front of the file name
   log=/path/to/file.log : specify the filename of the download history file
   oext=.mp5             : override the enclosures file extension
+  fnfield=guid          : override the field that determines the file name
+                          options are default, guid, title, unixtime, datetime
 ``` 

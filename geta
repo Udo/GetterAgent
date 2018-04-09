@@ -53,10 +53,10 @@ function xml_isolate($haystack, $startsWith, $endsWith)
 
 function invoke_command($params)
 {
-  if(!$GLOBALS['filename_filters'][$params['fnfilter']])
+  if(!$GLOBALS['filename_filters'][$params['fnfield']])
   {
-    print('Error: unknown filename filter "'.$params['fnfilter'].'"'.chr(10));  
-    print('Available filename filters: '.implode(', ', array_keys($GLOBALS['filename_filters'])).chr(10));
+    print('Error: unknown filename source "'.$params['fnfield'].'"'.chr(10));  
+    print('Available filename sources: '.implode(', ', array_keys($GLOBALS['filename_filters'])).chr(10));
     exit;
   }
   else if(isset($GLOBALS['commands'][$params['command']]))
@@ -103,7 +103,7 @@ function get_rss_enclosures(&$o)
     if($it['enclosure'])
     {
       $enc = $it['enclosure'][0];
-      $enc['filename'] = $o['opath'].$GLOBALS['filename_filters'][$o['fnfilter']]($enc, $it, $o).$o['oext']; 
+      $enc['filename'] = $o['opath'].$GLOBALS['filename_filters'][$o['fnfield']]($enc, $it, $o).$o['oext']; 
       $result[] = $enc;
     }
   }
@@ -250,7 +250,7 @@ $params = array();
 $params['script_name'] = array_shift($argv);
 $params['command'] = array_shift($argv);
 $params['fmt'] = 'json';
-$params['fnfilter'] = 'default';
+$params['fnfield'] = 'default';
 $params['opath'] = '';
 $params['oext'] = '';
 while(sizeof($argv) > 0)
@@ -324,6 +324,9 @@ This command downloads all the enclosure items from an RSS feed specified by the
   dir=/some/directory   : saves the enclosure files to the specified location
   podcastname=SomeCast  : specify the podcast name to put in front of the file name
   log=/path/to/file.log : specify the filename of the download history file
+  oext=.mp5             : override the enclosures file extension
+  fnfield=guid          : override the field that determines the file name
+                          options are default, guid, title, unixtime, datetime
 ');
   },
   
