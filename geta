@@ -53,13 +53,16 @@ function xml_isolate($haystack, $startsWith, $endsWith)
 
 function invoke_command($params)
 {
+  # check for valid filename filter
   if(!$GLOBALS['filename_filters'][$params['fnfield']])
   {
-    print('Error: unknown filename source "'.$params['fnfield'].'"'.chr(10));  
-    print('Available filename sources: '.implode(', ', array_keys($GLOBALS['filename_filters'])).chr(10));
-    exit;
+    $GLOBALS['filename_filters'][$params['fnfield']] = function($enclosure, $item, $o) use($params) {
+      print('getting '.$params['fnfield'].chr(10));
+      $p = parse_url(SimpleXML::GetNodeText($item[$params['fnfield']]));
+      return(str_replace('/', '-', $p['host'].'-'.$p['path']));
+    };
   }
-  else if(isset($GLOBALS['commands'][$params['command']]))
+  if(isset($GLOBALS['commands'][$params['command']]))
   {
     $GLOBALS['commands'][$params['command']]($params);
   }
@@ -86,12 +89,85 @@ function output($params, $data)
   }
 }
 
+function safe_fn($fn)
+{
+  $result = '';
+  $len = strlen($fn);
+  for($i = 0; $i < $len; $i++)
+  {
+    $c = substr($fn, $i, 1);
+    if(ctype_alnum($c) || $c === '_' || $c === '-' || $c === ' ')
+      $result .= $c;
+    else if($c === ':' || $c === '.')
+      $result .= '_';
+  }
+  return($result);
+}
+
+function field_format($fmt, $item)
+{
+  $result = '';
+  foreach(explode('+', $fmt) as $f) if($f != '')
+  {
+    $seg = explode(',', $f);
+    if(sizeof($seg) == 3)
+      $result .= substr($item[$seg[0]], $seg[1], $seg[2]);
+    else
+      $result .= $f;
+  }
+  return($result);
+}
+
+function struct_filter($struct, $keyFilter, &$result = false)
+{
+  if($result === false)
+    $result = array();
+  foreach($struct as $k => $v)
+  {
+    if($k === $keyFilter)
+    {
+      $result[] = $v;
+    }
+    if(is_array($v))
+      struct_filter($v, $keyFilter, $result);
+  }
+  return($result);
+}
+
+function url_format($o, $url)
+{
+  if($o['urlmatch'])
+    $url = str_replace($o['urlmatch'], $o['urlreplace'], $url);
+  return($url);
+}
+
 function get_rss_items(&$o)
 {
-  $content = shell_exec('curl -s '.escapeshellarg($o['url']).' 2>&1');
+  $content = shell_exec('curl -L -s '.escapeshellarg($o['url']).' 2>&1');
   $meta = xml_isolate($content, '<channel>', '</channel>');
   $o['meta'] = $meta['channel'][0];
+  # strategy 1: get <item> elements
   $items = xml_isolate($content, '<item>', '</item>');
+  if(sizeof($items) == 0)
+  {
+    $structure = SimpleXML::Parse($content);
+    $list = struct_filter($structure, 'item');
+    if(is_array($list[0]) && sizeof($list[0]) > 0)
+    {
+      foreach($list[0] as $item)
+      {
+        $items['item'][] = $item;
+      }
+    }
+    else
+    {
+      $list = struct_filter($structure, '@rdf:resource');
+      if(sizeof($list) > 0) foreach($list as $item)
+        $items['item'][] = array('enclosure' => array(
+          array('@url' => $item),
+          ));
+    }
+  }
   if(sizeof($items) == 0)
     $items = $meta;
   return($items);  
@@ -103,10 +179,21 @@ function get_rss_enclosures(&$o)
   $items = get_rss_items($o);
   if(is_array($items['item'])) foreach($items['item'] as $it)
   {
-    if($it['enclosure'])
+    if($it['enclosure'] || $it[$o['fnfield']] || $it[$o['urlfield']])
     {
       $enc = $it['enclosure'][0];
-      $enc['filename'] = $o['opath'].$GLOBALS['filename_filters'][$o['fnfield']]($enc, $it, $o).$o['oext']; 
+      if($o['urlfield'])
+        $enc['@url'] = $it[$o['urlfield']];
+      if($enc['@url'])
+        $enc['@url'] = url_format($o, $enc['@url']);
+      $enc['filename'] = $o['opath'].safe_fn($GLOBALS['filename_filters'][$o['fnfield']]($enc, $it, $o)).$o['oext'];
+      $result[] = $enc;
+    }
+    else if($o['altpath'])
+    {
+      $enc = $it;
+      $enc['@url'] = url_format($o, field_format($o['altpath'], $enc));
+      $enc['filename'] = $o['opath'].safe_fn($GLOBALS['filename_filters'][$o['fnfield']]($enc, $it, $o)).$o['oext']; 
       $result[] = $enc;
     }
   }
@@ -267,6 +354,7 @@ $params['fmt'] = 'json';
 $params['fnfield'] = 'default';
 $params['opath'] = '';
 $params['oext'] = '';
+$params['overwrite'] = 'no';
 while(sizeof($argv) > 0)
 {
   $s = array_shift($argv);
@@ -331,33 +419,57 @@ $GLOBALS['commands'] = array(
   'help' => function() {
     print('geta command usage:
 
-  geta download url=http://example.com/rss [options]
+DOWNLOAD:
+  > geta download url=http://example.com/rss [options]
 
-This command downloads all the enclosure items from an RSS feed specified by the url parameter. The following options are supported:
+  This command downloads all the enclosure items from an RSS feed specified by the url parameter. The following options are supported:
 
   dir=/some/directory   : saves the enclosure files to the specified location
   podcastname=SomeCast  : specify the podcast name to put in front of the file name
   log=/path/to/file.log : specify the filename of the download history file
   oext=.mp5             : override the enclosures file extension
   fnfield=guid          : override the field that determines the file name
-                          options are default, guid, title, unixtime, datetime
-  overwrite=no          : never overwrite a file
+                          options are default, guid, title, unixtime, datetime, or
+                          any of the XML element names found inside of the <item>
+  urlfield=field        : the XML element name to use for the item URL
+                          (instead of the default: @url)
+  urlmatch=string       : match string for replacement
+  urlreplace=string     : replace the matched string with this
+  overwrite=no|yes      : never overwrite a file
+
+ENCLOSURES
+  > geta enclosures url=http://example.com/rss 
+  Outputs a list of enclosures extracted from the feed.
+  
+  fmt=FORMAT            : output format ('.implode(', ', array_keys($GLOBALS['fmt'])).')
+  
+ITEMS
+  > geta items url=http://example.com/rss 
+  Outputs a list of items/articles extracted from the feed.
+
+  fmt=FORMAT            : output format ('.implode(', ', array_keys($GLOBALS['fmt'])).')
+
+XML
+  > geta xml url=http://example.com/rss 
+  Outputs the parsed data structure of the feed.
+
+  fmt=FORMAT            : output format ('.implode(', ', array_keys($GLOBALS['fmt'])).')
 ');
   },
   
-  'debug-xml' => function($o) {
+  'xml' => function($o) {
     if(!$o['url'])
     {
       error('parameter "url" missing');
     }
     else
     {
-      $content = shell_exec('curl -s '.escapeshellarg($o['url']).' 2>&1');
+      $content = shell_exec('curl -L -s '.escapeshellarg($o['url']).' 2>&1');
       output($o, SimpleXML::Parse($content));
     }
   },
   
-  'debug-rss-items' => function($o) {
+  'items' => function($o) {
     if(!$o['url'])
     {
       error('parameter "url" missing');
@@ -368,7 +480,7 @@ This command downloads all the enclosure items from an RSS feed specified by the
     }
   },
 
-  'debug-enclosures' => function($o) {
+  'enclosures' => function($o) {
     if(!$o['url'])
     {
       error('parameter "url" missing');
@@ -394,7 +506,7 @@ This command downloads all the enclosure items from an RSS feed specified by the
         print('no enclosures found'.chr(10));
         print_r($o['meta']);
       }
-      foreach($encList as $enc)
+      foreach($encList as $enc) if($enc['@url'])
       {
         $baseName = $enc['filename'];
         $fileUrl = $enc['@url'];
