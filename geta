@@ -96,9 +96,9 @@ function safe_fn($fn)
   for($i = 0; $i < $len; $i++)
   {
     $c = substr($fn, $i, 1);
-    if(ctype_alnum($c) || $c === '_' || $c === '-' || $c === ' ')
+    if(ctype_alnum($c) || $c === '_' || $c === '-' || $c === ' ' || $c === '.')
       $result .= $c;
-    else if($c === ':' || $c === '.')
+    else if($c === ':')
       $result .= '_';
   }
   return($result);
@@ -527,6 +527,11 @@ XML
             $output = shell_exec($cmd);
           else
             $output = true;
+          if(filesize($o['dir'].'/'.$saveFileName) == 0)
+          {
+            $output = false;
+            unlink($o['dir'].'/'.$saveFileName);
+          }
           if($output)
           {
             $alreadyDownloaded[$saveFileName] = time();
